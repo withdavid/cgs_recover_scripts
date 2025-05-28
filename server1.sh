@@ -96,12 +96,47 @@ for plugin in check_service_cpu.sh check_locks.sh; do
   echo "  Installed $plugin"
 done
 
-# 6. Enable & restart core services (exceto fail2ban)
-echo "Enabling and restarting core services..."
-systemctl enable nginx bind9
-systemctl restart nginx bind9
+# 6. Configure Fail2Ban
+echo "Configuring Fail2Ban..."
+FAIL2BAN_SRC="${CONF_DIR}/server01_fail2ban_jail_local.conf"
+FAIL2BAN_DEST="/etc/fail2ban/jail.local"
 
-# 7. Ensure NRPE service
+# Verificar se o arquivo fonte existe
+if [[ ! -f "$FAIL2BAN_SRC" ]]; then
+  echo "Error: Fail2Ban config file not found: $FAIL2BAN_SRC" >&2
+  exit 1
+fi
+
+# Remover arquivo jail.local existente se houver
+if [[ -f "$FAIL2BAN_DEST" ]]; then
+  echo "Removing existing jail.local file..."
+  rm -f "$FAIL2BAN_DEST"
+fi
+
+# Copiar arquivo diretamente
+echo "Copying Fail2Ban configuration..."
+echo "From: $FAIL2BAN_SRC"
+echo "To: $FAIL2BAN_DEST"
+
+cp "$FAIL2BAN_SRC" "$FAIL2BAN_DEST"
+chmod 644 "$FAIL2BAN_DEST"
+
+# Verificar se o arquivo foi copiado
+if [[ -f "$FAIL2BAN_DEST" && -s "$FAIL2BAN_DEST" ]]; then
+  echo "Fail2Ban configuration copied successfully."
+  echo "Contents of $FAIL2BAN_DEST:"
+  cat "$FAIL2BAN_DEST"
+else
+  echo "Error: Failed to copy Fail2Ban configuration" >&2
+  exit 1
+fi
+
+# 7. Enable & restart core services
+echo "Enabling and restarting services..."
+systemctl enable nginx bind9 fail2ban
+systemctl restart nginx bind9 fail2ban
+
+# 8. Ensure NRPE service
 echo "Ensuring NRPE service is running..."
 if command -v nrpe &>/dev/null; then
   update-rc.d nrpe defaults || true
@@ -110,103 +145,16 @@ else
   echo "Warning: NRPE not installed." >&2
 fi
 
-# 8. Configurar Fail2Ban como último passo
-echo "==================================================================="
-echo "Configurando Fail2Ban..."
-echo "==================================================================="
-
-# Ativar o serviço Fail2Ban
-systemctl enable fail2ban
-systemctl restart fail2ban
-
-# Aguardar um momento para garantir que o serviço está em execução
-sleep 2
-
-# Verificar se o serviço está ativo
-if ! systemctl is-active --quiet fail2ban; then
-  echo "Erro: Falha ao iniciar o serviço fail2ban." >&2
-  exit 1
-fi
-
-# Configurar jail.local
-FAIL2BAN_SRC="${CONF_DIR}/server01_fail2ban_jail_local.conf"
-FAIL2BAN_DEST="/etc/fail2ban/jail.local"
-
-# Verificar arquivo de origem
-if [[ ! -f "$FAIL2BAN_SRC" ]]; then
-  echo "Erro: Arquivo de configuração Fail2Ban não encontrado: $FAIL2BAN_SRC" >&2
-  exit 1
-fi
-
-if [[ ! -s "$FAIL2BAN_SRC" ]]; then
-  echo "Erro: Arquivo de configuração Fail2Ban está vazio: $FAIL2BAN_SRC" >&2
-  exit 1
-fi
-
-# Backup de configuração existente (se houver)
-if [[ -f "$FAIL2BAN_DEST" ]]; then
-  echo "Fazendo backup de configuração existente: $FAIL2BAN_DEST"
-  cp -f "$FAIL2BAN_DEST" "${FAIL2BAN_DEST}.bak"
-fi
-
-# Copiar configuração usando método mais confiável
-echo "Copiando configuração do Fail2Ban..."
-echo "Método 1: Usando cat e redirecionamento"
-cat "$FAIL2BAN_SRC" > "$FAIL2BAN_DEST"
-
-# Verificar se o arquivo foi criado corretamente
-if [[ ! -s "$FAIL2BAN_DEST" ]]; then
-  echo "Método 1 falhou. Tentando método 2: Copiar linha por linha"
-  
-  # Criar arquivo manualmente
-  {
-    echo "[DEFAULT]"
-    echo "bantime = 3600"
-    echo "findtime = 600"
-    echo "maxretry = 3"
-    echo ""
-    echo "[sshd]"
-    echo "enabled = true"
-    echo "port    = ssh"
-    echo "filter  = sshd"
-    echo "logpath = /var/log/auth.log"
-    echo ""
-    echo "[nginx-http-auth]"
-    echo "enabled = true"
-    echo "port    = http,https"
-    echo "filter  = nginx-http-auth"
-    echo "logpath = /var/log/nginx/error.log"
-  } > "$FAIL2BAN_DEST"
-  
-  if [[ ! -s "$FAIL2BAN_DEST" ]]; then
-    echo "Erro: Falha ao criar arquivo de configuração do Fail2Ban" >&2
-    exit 1
-  fi
-fi
-
-# Definir permissões corretas
-chmod 644 "$FAIL2BAN_DEST"
-
-# Exibir conteúdo para verificação
-echo "Conteúdo do arquivo $FAIL2BAN_DEST:"
-cat "$FAIL2BAN_DEST"
-
-# Reiniciar serviço para aplicar configurações
-echo "Reiniciando Fail2Ban para aplicar configurações..."
-systemctl restart fail2ban
-
-# Verificar se o serviço está rodando após a configuração
+# Verificar status do Fail2Ban
+echo "Checking Fail2Ban status..."
 if systemctl is-active --quiet fail2ban; then
-  echo "Fail2Ban configurado e reiniciado com sucesso!"
+  echo "Fail2Ban is running successfully."
+  if command -v fail2ban-client &>/dev/null; then
+    echo "Active jails:"
+    fail2ban-client status
+  fi
 else
-  echo "Erro: Fail2Ban não está rodando após a configuração" >&2
-  exit 1
-fi
-
-# Verificar jails ativas
-if command -v fail2ban-client &>/dev/null; then
-  echo "Jails ativas:"
-  fail2ban-client status | grep "Jail list"
+  echo "Warning: Fail2Ban is not running properly." >&2
 fi
 
 # Done
