@@ -73,14 +73,34 @@ sudo apt update && sudo apt upgrade
 apt install -y \
   apache2 \
   libapache2-mod-php7.4 \
-  mariadb-server openssl redis-server wget \
+  mariadb-server mariadb-client openssl redis-server wget \
   php7.4 php7.4-imagick php7.4-common php7.4-curl \
   php7.4-gd php7.4-imap php7.4-intl php7.4-json \
   php7.4-mbstring php7.4-gmp php7.4-bcmath php7.4-mysql \
   php7.4-ssh2 php7.4-xml php7.4-zip php7.4-apcu \
   php7.4-redis php7.4-ldap php-phpseclib
 
-log "Core packages installed successfully"
+# Ensure critical services are started
+systemctl enable apache2 mariadb redis-server
+systemctl start apache2 mariadb redis-server
+
+# Verify services are running
+if ! systemctl is-active --quiet apache2; then
+  log "ERROR: Apache2 failed to start"
+  systemctl status apache2
+fi
+
+if ! systemctl is-active --quiet mariadb; then
+  log "ERROR: MariaDB failed to start"
+  systemctl status mariadb
+fi
+
+if ! systemctl is-active --quiet redis-server; then
+  log "ERROR: Redis failed to start"
+  systemctl status redis-server
+fi
+
+log "Core packages installed and services started successfully"
 
 # Instala o SMBClient PHP Module
 apt-get install -y php7.4-smbclient
@@ -140,7 +160,14 @@ log "Apache2 virtual host configured"
 
 # Configuração de base de dados MariaDB
 sed -i "/\[mysqld\]/atransaction-isolation = READ-COMMITTED\nperformance_schema = on" /etc/mysql/mariadb.conf.d/50-server.cnf
-systemctl start mariadb
+systemctl restart mariadb
+
+# Verify MariaDB is running after restart
+if ! systemctl is-active --quiet mariadb; then
+  log "ERROR: MariaDB failed to restart after configuration"
+  systemctl status mariadb
+  exit 1
+fi
 
 mysql -u root -e \
 "CREATE DATABASE IF NOT EXISTS owncloud; \
@@ -148,13 +175,28 @@ CREATE USER IF NOT EXISTS 'owncloud'@'localhost' IDENTIFIED BY 'OwncloudDB#passw
 GRANT ALL PRIVILEGES ON owncloud.* TO 'owncloud'@'localhost' WITH GRANT OPTION; \
 FLUSH PRIVILEGES;"
 
+# Test database connection
+if mysql -u owncloud -p'OwncloudDB#password123' -e "USE owncloud;" 2>/dev/null; then
+  log "MariaDB configured and tested successfully"
+else
+  log "ERROR: MariaDB configuration test failed"
+  exit 1
+fi
+
 log "MariaDB configured successfully"
 
 # Habilita modulos Apache recomendados e reinicia o serviço
 a2enmod dir env headers mime rewrite setenvif
 systemctl restart apache2
 
-log "Apache modules enabled"
+# Verify Apache is running after restart
+if ! systemctl is-active --quiet apache2; then
+  log "ERROR: Apache2 failed to restart after module configuration"
+  systemctl status apache2
+  exit 1
+fi
+
+log "Apache modules enabled and service verified"
 
 # Download Owncload
 cd /var/www/
@@ -174,7 +216,13 @@ occ maintenance:install \
 --admin-user "admin" \
 --admin-pass "OwnCloud#server2_password123"
 
-log "OwnCloud installed successfully"
+# Verify OwnCloud installation
+if [ $? -eq 0 ] && [ -f "/var/www/owncloud/config/config.php" ]; then
+  log "OwnCloud installed successfully"
+else
+  log "ERROR: OwnCloud installation failed"
+  exit 1
+fi
 
 # Configura os dominios confiáveis (Trusted Domains)
 my_ip=$(hostname -I|cut -f1 -d ' ')
@@ -432,6 +480,123 @@ for service in "${services[@]}"; do
   fi
 done
 
+# === CORREÇÃO DE PROBLEMAS ===
+
+log "=== FIXING ANY REMAINING ISSUES ==="
+
+# Ensure MariaDB client is installed
+if ! command -v mysql &>/dev/null; then
+  log "Installing missing MariaDB client..."
+  apt install -y mariadb-client
+fi
+
+# Start and enable all critical services
+log "Ensuring all services are started and enabled..."
+systemctl enable apache2 mariadb redis-server smbd nrpe fail2ban
+systemctl start apache2 mariadb redis-server smbd nrpe fail2ban
+
+# Wait a moment for services to start
+sleep 5
+
+# Verify and fix each service
+log "Verifying each service..."
+
+# Apache2
+if ! systemctl is-active --quiet apache2; then
+  log "Fixing Apache2..."
+  systemctl restart apache2
+  sleep 2
+  if ! systemctl is-active --quiet apache2; then
+    log "ERROR: Apache2 still not running"
+    systemctl status apache2
+  else
+    log "Apache2 fixed and running"
+  fi
+fi
+
+# MariaDB
+if ! systemctl is-active --quiet mariadb; then
+  log "Fixing MariaDB..."
+  systemctl restart mariadb
+  sleep 3
+  if ! systemctl is-active --quiet mariadb; then
+    log "ERROR: MariaDB still not running"
+    systemctl status mariadb
+  else
+    log "MariaDB fixed and running"
+  fi
+fi
+
+# Redis
+if ! systemctl is-active --quiet redis-server; then
+  log "Fixing Redis..."
+  systemctl restart redis-server
+  sleep 2
+  if ! systemctl is-active --quiet redis-server; then
+    log "ERROR: Redis still not running"
+    systemctl status redis-server
+  else
+    log "Redis fixed and running"
+  fi
+fi
+
+# Test database connection
+log "Testing database connection..."
+if mysql -u owncloud -p'OwncloudDB#password123' -e "USE owncloud;" 2>/dev/null; then
+  log "Database connection successful"
+else
+  log "WARNING: Database connection failed - may need manual intervention"
+fi
+
+# Test Redis connection
+log "Testing Redis connection..."
+if redis-cli ping 2>/dev/null | grep -q PONG; then
+  log "Redis connection successful"
+else
+  log "WARNING: Redis connection failed"
+fi
+
+# Fix OwnCloud permissions
+if [ -d "/var/www/owncloud" ]; then
+  log "Fixing OwnCloud permissions..."
+  chown -R www-data:www-data /var/www/owncloud
+  
+  # Test OCC command
+  if [ -f "/var/www/owncloud/occ" ]; then
+    log "Testing OCC command..."
+    sudo -u www-data php /var/www/owncloud/occ status 2>/dev/null || log "OCC command needs attention"
+  fi
+fi
+
+# Test Apache configuration
+log "Testing Apache configuration..."
+if apachectl -t 2>/dev/null; then
+  log "Apache configuration is valid"
+else
+  log "WARNING: Apache configuration has issues"
+fi
+
+# Final service status check
+log "=== FINAL SERVICE STATUS ==="
+failed_services=()
+
+for service in "${services[@]}"; do
+  if systemctl is-active --quiet "$service"; then
+    log "✓ $service is running"
+  else
+    log "✗ $service is NOT running"
+    failed_services+=("$service")
+  fi
+done
+
+# Report results
+if [ ${#failed_services[@]} -eq 0 ]; then
+  log "🎉 ALL SERVICES ARE RUNNING SUCCESSFULLY!"
+else
+  log "⚠️  SERVICES STILL NOT RUNNING: ${failed_services[*]}"
+  log "Manual intervention may be required for these services"
+fi
+
 log "=== SERVER 2 CONFIGURATION COMPLETED ==="
 log "OwnCloud Admin: admin / OwnCloud#server2_password123"
 log "Database: owncloud / OwncloudDB#password123"
@@ -440,3 +605,4 @@ log "OwnCloud URL: http://$my_ip"
 log "OwnCloud URL: http://$my_domain"
 log "Samba Share: \\\\$my_ip\\grupo6"
 log "Check output_sv2.txt for detailed logs"
+log "Run ./health_check_sv2.sh to verify installation"
