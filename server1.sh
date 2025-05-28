@@ -29,12 +29,14 @@ if [[ ! -d "$SCRIPTS_DIR" ]]; then
 fi
 
 # 1. Update & install packages
+echo "Updating system and installing packages..."
 apt update -y
 apt install -y nginx bind9 bind9utils bind9-doc dnsutils \
                ufw gcc make libssl-dev xinetd wget \
                nagios-plugins nagios-plugins-contrib fail2ban
 
 # 2. Configure UFW
+echo "Configuring firewall rules..."
 ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
@@ -94,93 +96,117 @@ for plugin in check_service_cpu.sh check_locks.sh; do
   echo "  Installed $plugin"
 done
 
-# 6. Deploy Fail2Ban config
-FAIL2BAN_SRC="${CONF_DIR}/server01_fail2ban_jail_local.conf"
-FAIL2BAN_DEST="/etc/fail2ban/jail.local"
+# 6. Enable & restart core services (exceto fail2ban)
+echo "Enabling and restarting core services..."
+systemctl enable nginx bind9
+systemctl restart nginx bind9
 
-echo "Deploying Fail2Ban config..."
-echo "Source: $FAIL2BAN_SRC"
-echo "Destination: $FAIL2BAN_DEST"
-
-# Ensure source file exists and is not empty
-if [[ ! -f "$FAIL2BAN_SRC" ]]; then
-  echo "Error: missing Fail2Ban config: $FAIL2BAN_SRC" >&2
-  exit 1
-fi
-
-# Check if source file is empty
-if [[ ! -s "$FAIL2BAN_SRC" ]]; then
-  echo "Error: Fail2Ban config file is empty: $FAIL2BAN_SRC" >&2
-  exit 1
-fi
-
-# Ensure directory exists
-if [[ ! -d "/etc/fail2ban" ]]; then
-  echo "Creating /etc/fail2ban directory..."
-  mkdir -p /etc/fail2ban
-  if [[ $? -ne 0 ]]; then
-    echo "Error: Failed to create /etc/fail2ban directory" >&2
-    exit 1
-  fi
-fi
-
-# Backup existing file if any
-if [[ -f "$FAIL2BAN_DEST" ]]; then
-  mv "$FAIL2BAN_DEST" "${FAIL2BAN_DEST}.bak"
-  echo "  Backed up existing jail.local"
-fi
-
-# Copy file with verbose output
-echo "Copying file with: cp -v \"$FAIL2BAN_SRC\" \"$FAIL2BAN_DEST\""
-cp -v "$FAIL2BAN_SRC" "$FAIL2BAN_DEST"
-COPY_RESULT=$?
-
-if [[ $COPY_RESULT -ne 0 ]]; then
-  echo "Error: cp command failed with exit code $COPY_RESULT" >&2
-  exit 1
-fi
-
-chmod 644 "$FAIL2BAN_DEST"
-
-# Verify the file was copied correctly
-if [[ ! -f "$FAIL2BAN_DEST" ]]; then
-  echo "Error: Failed to copy Fail2Ban config or file does not exist" >&2
-  # Try to restore from backup if available
-  if [[ -f "${FAIL2BAN_DEST}.bak" ]]; then
-    echo "  Restoring from backup..."
-    cp "${FAIL2BAN_DEST}.bak" "$FAIL2BAN_DEST"
-  fi
-  exit 1
-fi
-
-if [[ ! -s "$FAIL2BAN_DEST" ]]; then
-  echo "Error: Fail2Ban config file is empty after copy" >&2
-  # Try to restore from backup if available
-  if [[ -f "${FAIL2BAN_DEST}.bak" ]]; then
-    echo "  Restoring from backup..."
-    cp "${FAIL2BAN_DEST}.bak" "$FAIL2BAN_DEST"
-  fi
-  exit 1
-fi
-
-echo "Fail2Ban config file installed successfully."
-
-# Show file contents for verification
-echo "Contents of $FAIL2BAN_DEST:"
-cat "$FAIL2BAN_DEST"
-
-# 7. Enable & restart core services
-echo "Enabling and restarting services..."
-systemctl enable nginx bind9 fail2ban
-systemctl restart nginx bind9 fail2ban
-
-# 8. Ensure NRPE service
+# 7. Ensure NRPE service
 echo "Ensuring NRPE service is running..."
 if command -v nrpe &>/dev/null; then
   update-rc.d nrpe defaults || true
   service nrpe restart || service nrpe start
 else
   echo "Warning: NRPE not installed." >&2
+fi
+
+# 8. Configurar Fail2Ban como último passo
+echo "==================================================================="
+echo "Configurando Fail2Ban..."
+echo "==================================================================="
+
+# Ativar o serviço Fail2Ban
+systemctl enable fail2ban
+systemctl restart fail2ban
+
+# Aguardar um momento para garantir que o serviço está em execução
+sleep 2
+
+# Verificar se o serviço está ativo
+if ! systemctl is-active --quiet fail2ban; then
+  echo "Erro: Falha ao iniciar o serviço fail2ban." >&2
+  exit 1
+fi
+
+# Configurar jail.local
+FAIL2BAN_SRC="${CONF_DIR}/server01_fail2ban_jail_local.conf"
+FAIL2BAN_DEST="/etc/fail2ban/jail.local"
+
+# Verificar arquivo de origem
+if [[ ! -f "$FAIL2BAN_SRC" ]]; then
+  echo "Erro: Arquivo de configuração Fail2Ban não encontrado: $FAIL2BAN_SRC" >&2
+  exit 1
+fi
+
+if [[ ! -s "$FAIL2BAN_SRC" ]]; then
+  echo "Erro: Arquivo de configuração Fail2Ban está vazio: $FAIL2BAN_SRC" >&2
+  exit 1
+fi
+
+# Backup de configuração existente (se houver)
+if [[ -f "$FAIL2BAN_DEST" ]]; then
+  echo "Fazendo backup de configuração existente: $FAIL2BAN_DEST"
+  cp -f "$FAIL2BAN_DEST" "${FAIL2BAN_DEST}.bak"
+fi
+
+# Copiar configuração usando método mais confiável
+echo "Copiando configuração do Fail2Ban..."
+echo "Método 1: Usando cat e redirecionamento"
+cat "$FAIL2BAN_SRC" > "$FAIL2BAN_DEST"
+
+# Verificar se o arquivo foi criado corretamente
+if [[ ! -s "$FAIL2BAN_DEST" ]]; then
+  echo "Método 1 falhou. Tentando método 2: Copiar linha por linha"
+  
+  # Criar arquivo manualmente
+  {
+    echo "[DEFAULT]"
+    echo "bantime = 3600"
+    echo "findtime = 600"
+    echo "maxretry = 3"
+    echo ""
+    echo "[sshd]"
+    echo "enabled = true"
+    echo "port    = ssh"
+    echo "filter  = sshd"
+    echo "logpath = /var/log/auth.log"
+    echo ""
+    echo "[nginx-http-auth]"
+    echo "enabled = true"
+    echo "port    = http,https"
+    echo "filter  = nginx-http-auth"
+    echo "logpath = /var/log/nginx/error.log"
+  } > "$FAIL2BAN_DEST"
+  
+  if [[ ! -s "$FAIL2BAN_DEST" ]]; then
+    echo "Erro: Falha ao criar arquivo de configuração do Fail2Ban" >&2
+    exit 1
+  fi
+fi
+
+# Definir permissões corretas
+chmod 644 "$FAIL2BAN_DEST"
+
+# Exibir conteúdo para verificação
+echo "Conteúdo do arquivo $FAIL2BAN_DEST:"
+cat "$FAIL2BAN_DEST"
+
+# Reiniciar serviço para aplicar configurações
+echo "Reiniciando Fail2Ban para aplicar configurações..."
+systemctl restart fail2ban
+
+# Verificar se o serviço está rodando após a configuração
+if systemctl is-active --quiet fail2ban; then
+  echo "Fail2Ban configurado e reiniciado com sucesso!"
+else
+  echo "Erro: Fail2Ban não está rodando após a configuração" >&2
+  exit 1
+fi
+
+# Verificar jails ativas
+if command -v fail2ban-client &>/dev/null; then
+  echo "Jails ativas:"
+  fail2ban-client status | grep "Jail list"
 fi
 
 # Done
