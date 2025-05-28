@@ -31,7 +31,7 @@ Este projeto contém scripts de deployment automatizado para três servidores:
 
 ```
 cgs_recover_scripts/
-├── README.md                    # Este arquivo
+├── README.md                   
 ├── deploy_sv1.sh               # Script de deployment Server 1
 ├── deploy_sv2.sh               # Script de deployment Server 2
 ├── deploy_sv3.sh               # Script de deployment Server 3
