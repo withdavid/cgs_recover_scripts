@@ -47,7 +47,6 @@ echo "3. Checking monitoring scripts..."
 scripts=(
     "/usr/local/nagios/libexec/check_service_cpu.sh"
     "/usr/local/nagios/libexec/check_locks.sh"
-    "/usr/local/nagios/libexec/check_smb_share"
     "/usr/lib/nagios/plugins/check_smb_share"
 )
 
@@ -152,7 +151,7 @@ used_percent=$(echo "$df_output" | awk '{print $5}' | sed 's/%//')
 if [[ $used_percent -lt 80 ]]; then
     echo "Disk usage: $used_percent% (OK)"
 else
-    echo "⚠ Disk usage: $used_percent% (Warning: >80%)"
+    echo "Disk usage: $used_percent% (Warning: >80%)"
 fi
 echo
 
