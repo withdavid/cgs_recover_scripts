@@ -164,7 +164,7 @@ fi
 log "Deploying Fail2Ban configuration..."
 if cp "$FAIL2BAN_SRC" /etc/fail2ban/jail.local; then
   chmod 644 /etc/fail2ban/jail.local
-  log "✓ Fail2Ban configuration deployed successfully"
+  log "Fail2Ban configuration deployed successfully"
 else
   log "ERROR: Failed to copy Fail2Ban configuration"
   exit 1
@@ -201,13 +201,13 @@ fi
 
 # Verificar Fail2Ban
 if systemctl is-active --quiet fail2ban; then
-  log "✓ Fail2Ban is running"
+  log "Fail2Ban is running"
   if command -v fail2ban-client &>/dev/null; then
     log "Active jails:"
     fail2ban-client status
   fi
 else
-  log "✗ Fail2Ban is not running"
+  log "Fail2Ban is not running"
 fi
 
 # 10. Test NRPE connection
