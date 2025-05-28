@@ -162,6 +162,60 @@ sudo systemctl stop nagios.service
 sudo systemctl restart nagios.service
 sudo systemctl status nagios.service
 
+# === INSTALAÇÃO NRPE CLIENT ===
+
+log "=== INSTALLING NRPE CLIENT ==="
+
+# Instalar nagios-nrpe-plugin para ter o check_nrpe
+log "Installing NRPE client plugin..."
+sudo apt-get install -y nagios-nrpe-plugin
+
+if [ $? -eq 0 ]; then
+  log "NRPE client plugin installed successfully"
+else
+  log "ERROR: Failed to install NRPE client plugin"
+  exit 1
+fi
+
+# Verificar se o check_nrpe foi instalado
+if [ -f "/usr/lib/nagios/plugins/check_nrpe" ]; then
+  log "check_nrpe plugin found at /usr/lib/nagios/plugins/check_nrpe"
+  
+  # Testar o plugin
+  if /usr/lib/nagios/plugins/check_nrpe --help > /dev/null 2>&1; then
+    log "check_nrpe plugin is working correctly"
+    
+    # Verificar versão
+    nrpe_version=$(/usr/lib/nagios/plugins/check_nrpe --version 2>&1 | head -1)
+    log "NRPE client version: $nrpe_version"
+    
+    # Testar conectividade básica (sem especificar host ainda)
+    log "NRPE client installation completed successfully"
+  else
+    log "WARNING: check_nrpe plugin may have issues"
+  fi
+else
+  log "ERROR: check_nrpe plugin not found after installation"
+  
+  # Tentar instalação alternativa
+  log "Attempting alternative NRPE installation..."
+  sudo apt-get update
+  sudo apt-get install -y nagios-plugins nagios-plugins-contrib monitoring-plugins
+  
+  if [ -f "/usr/lib/nagios/plugins/check_nrpe" ]; then
+    log "NRPE client installed via alternative method"
+  else
+    log "ERROR: Failed to install NRPE client via alternative method"
+    exit 1
+  fi
+fi
+
+# Criar link simbólico se necessário
+if [ ! -f "/usr/local/nagios/libexec/check_nrpe" ] && [ -f "/usr/lib/nagios/plugins/check_nrpe" ]; then
+  ln -s /usr/lib/nagios/plugins/check_nrpe /usr/local/nagios/libexec/check_nrpe
+  log "Created symbolic link for check_nrpe in Nagios libexec directory"
+fi
+
 # === CONFIGURAÇÃO DOS HOSTS ===
 
 log "=== CONFIGURING NAGIOS HOSTS ==="

@@ -214,8 +214,34 @@ essential_plugins=(
 for plugin in "${essential_plugins[@]}"; do
   if [ -f "$plugin" ] && [ -x "$plugin" ]; then
     check_result 0 "Plugin found and executable: $(basename $plugin)"
+    
+    # Verificação especial para check_nrpe
+    if [[ "$plugin" == *"check_nrpe"* ]]; then
+      if $plugin --version > /dev/null 2>&1; then
+        nrpe_version=$($plugin --version 2>&1 | head -1)
+        log_info "NRPE client version: $nrpe_version"
+      else
+        check_result 2 "check_nrpe plugin has version issues"
+      fi
+    fi
   else
     check_result 1 "Plugin missing or not executable: $(basename $plugin)"
+    
+    # Para check_nrpe, tentar encontrar em localizações alternativas
+    if [[ "$plugin" == *"check_nrpe"* ]]; then
+      alternative_locations=(
+        "/usr/local/nagios/libexec/check_nrpe"
+        "/usr/lib/nagios/plugins/check_nrpe"
+        "/usr/lib/monitoring-plugins/check_nrpe"
+      )
+      
+      for alt_location in "${alternative_locations[@]}"; do
+        if [ -f "$alt_location" ] && [ -x "$alt_location" ]; then
+          check_result 2 "check_nrpe found at alternative location: $alt_location"
+          break
+        fi
+      done
+    fi
   fi
 done
 
