@@ -67,18 +67,24 @@ log "OCC script helper created"
 
 # 3. Install packages
 log "=== INSTALLING PACKAGES ==="
+
+# Install software-properties-common first to get add-apt-repository
+apt install -y software-properties-common
+
+# Add PHP repository for PHP 8.1
 add-apt-repository ppa:ondrej/php -y
 apt update && apt upgrade -y
 
+# Install all required packages
 apt install -y \
   apache2 \
-  libapache2-mod-php7.4 \
+  libapache2-mod-php8.1 \
   mariadb-server openssl redis-server wget \
-  php7.4 php7.4-imagick php7.4-common php7.4-curl \
-  php7.4-gd php7.4-imap php7.4-intl php7.4-json \
-  php7.4-mbstring php7.4-gmp php7.4-bcmath php7.4-mysql \
-  php7.4-ssh2 php7.4-xml php7.4-zip php7.4-apcu \
-  php7.4-redis php7.4-ldap php-phpseclib \
+  php8.1 php8.1-imagick php8.1-common php8.1-curl \
+  php8.1-gd php8.1-imap php8.1-intl \
+  php8.1-mbstring php8.1-gmp php8.1-bcmath php8.1-mysql \
+  php8.1-ssh2 php8.1-xml php8.1-zip php8.1-apcu \
+  php8.1-redis php8.1-ldap php-phpseclib \
   unzip bzip2 rsync curl jq \
   inetutils-ping ldap-utils smbclient \
   samba \
@@ -86,10 +92,23 @@ apt install -y \
   nagios-plugins nagios-plugins-contrib \
   fail2ban bc
 
+# Verify critical packages are installed
+if ! command -v apache2 &>/dev/null; then
+  log "ERROR: Apache2 installation failed"
+  exit 1
+fi
+
+if ! command -v php &>/dev/null; then
+  log "ERROR: PHP installation failed"
+  exit 1
+fi
+
+log "All packages installed successfully"
+
 # 4. Install SMBClient PHP Module
 log "=== INSTALLING SMBCLIENT PHP MODULE ==="
-apt-get install -y php7.4-smbclient
-echo "extension=smbclient.so" > /etc/php/7.4/mods-available/smbclient.ini
+apt-get install -y php8.1-smbclient
+echo "extension=smbclient.so" > /etc/php/8.1/mods-available/smbclient.ini
 phpenmod smbclient
 systemctl restart apache2
 
@@ -139,35 +158,68 @@ log "=== CONFIGURING MARIADB ==="
 sed -i "/\[mysqld\]/atransaction-isolation = READ-COMMITTED\nperformance_schema = on" /etc/mysql/mariadb.conf.d/50-server.cnf
 systemctl start mariadb
 
+# Verify MariaDB is running
+if ! systemctl is-active --quiet mariadb; then
+  log "ERROR: MariaDB failed to start"
+  exit 1
+fi
+
 mysql -u root -e "
 CREATE DATABASE IF NOT EXISTS $DB_NAME;
 CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
 GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;"
 
-log "MariaDB configured successfully"
+# Test database connection
+if mysql -u "$DB_USER" -p"$DB_PASS" -e "USE $DB_NAME;" 2>/dev/null; then
+  log "MariaDB configured successfully"
+else
+  log "ERROR: MariaDB configuration failed"
+  exit 1
+fi
 
 # 7. Enable Apache modules and restart
 log "=== ENABLING APACHE MODULES ==="
-a2enmod dir env headers mime rewrite setenvif
+a2enmod dir env headers mime rewrite setenvif php8.1
 systemctl restart apache2
+
+# Verify Apache is running
+if ! systemctl is-active --quiet apache2; then
+  log "ERROR: Apache2 failed to start"
+  exit 1
+fi
+
+log "Apache2 configured and running successfully"
 
 # 8. Download and install OwnCloud
 log "=== DOWNLOADING AND INSTALLING OWNCLOUD ==="
 cd /var/www/
-wget -q https://download.owncloud.com/server/stable/owncloud-complete-latest.tar.bz2
-tar -xjf owncloud-complete-latest.tar.bz2
+
+# Download OwnCloud with error checking
+if ! wget -q https://download.owncloud.com/server/stable/owncloud-complete-latest.tar.bz2; then
+  log "ERROR: Failed to download OwnCloud"
+  exit 1
+fi
+
+if ! tar -xjf owncloud-complete-latest.tar.bz2; then
+  log "ERROR: Failed to extract OwnCloud"
+  exit 1
+fi
+
 chown -R www-data. owncloud
 
-# Install OwnCloud
-occ maintenance:install \
+# Install OwnCloud with error checking
+if ! occ maintenance:install \
 --database "mysql" \
 --database-name "$DB_NAME" \
 --database-user "$DB_USER" \
 --database-pass "$DB_PASS" \
 --data-dir "/var/www/owncloud/data" \
 --admin-user "$ADMIN_USER" \
---admin-pass "$ADMIN_PASS"
+--admin-pass "$ADMIN_PASS"; then
+  log "ERROR: OwnCloud installation failed"
+  exit 1
+fi
 
 # Configure trusted domains
 MY_IP=$(hostname -I | cut -f1 -d ' ')
@@ -223,7 +275,10 @@ cat >> /etc/samba/smb.conf << EOF
 EOF
 
 # Create Samba user and directory
-adduser --disabled-password --gecos "" "$SAMBA_USER"
+if ! adduser --disabled-password --gecos "" "$SAMBA_USER"; then
+  log "WARNING: User $SAMBA_USER may already exist"
+fi
+
 echo "$SAMBA_USER:$SAMBA_PASS" | chpasswd
 echo -e "$SAMBA_PASS\n$SAMBA_PASS" | smbpasswd -a "$SAMBA_USER"
 
@@ -231,6 +286,13 @@ mkdir -p "/home/$SAMBA_USER/pasta_grupo6"
 chown "$SAMBA_USER:$SAMBA_USER" "/home/$SAMBA_USER/pasta_grupo6"
 
 systemctl restart smbd
+
+# Verify Samba is running
+if ! systemctl is-active --quiet smbd; then
+  log "ERROR: Samba failed to start"
+  exit 1
+fi
+
 log "Samba configured successfully"
 
 # 13. Configure UFW Firewall
@@ -245,12 +307,31 @@ ufw --force enable
 # 14. Install and configure NRPE
 log "=== INSTALLING NRPE FROM SOURCE ==="
 cd /tmp
-wget -q https://github.com/NagiosEnterprises/nrpe/archive/nrpe-4.1.0.tar.gz
-tar xzf nrpe-4.1.0.tar.gz
+
+# Download NRPE with error checking
+if ! wget -q https://github.com/NagiosEnterprises/nrpe/archive/nrpe-4.1.0.tar.gz; then
+  log "ERROR: Failed to download NRPE"
+  exit 1
+fi
+
+if ! tar xzf nrpe-4.1.0.tar.gz; then
+  log "ERROR: Failed to extract NRPE"
+  exit 1
+fi
+
 cd nrpe-nrpe-4.1.0
 
-./configure --enable-command-args
-make all
+# Compile and install NRPE
+if ! ./configure --enable-command-args; then
+  log "ERROR: NRPE configure failed"
+  exit 1
+fi
+
+if ! make all; then
+  log "ERROR: NRPE compilation failed"
+  exit 1
+fi
+
 make install-groups-users
 make install
 make install-config
@@ -261,6 +342,8 @@ systemctl enable nrpe
 # Create necessary directories
 mkdir -p /usr/local/nagios/var
 chown nagios:nagios /usr/local/nagios/var
+
+log "NRPE compiled and installed successfully"
 
 # 15. Deploy NRPE config
 log "=== DEPLOYING NRPE CONFIG ==="
@@ -363,18 +446,33 @@ chown -R www-data. owncloud
 log "=== CHECKING SERVICES STATUS ==="
 
 services=("apache2" "mariadb" "redis-server" "smbd" "nrpe" "fail2ban")
+failed_services=()
+
 for service in "${services[@]}"; do
   if systemctl is-active --quiet "$service"; then
     log "$service is running"
   else
-    log "$service is not running"
+    log "ERROR: $service is not running"
+    failed_services+=("$service")
   fi
 done
+
+# Report any failed services
+if [ ${#failed_services[@]} -gt 0 ]; then
+  log "WARNING: The following services failed to start: ${failed_services[*]}"
+  log "Please check the logs for these services"
+else
+  log "All services are running successfully"
+fi
 
 # Test NRPE connection
 if command -v /usr/local/nagios/libexec/check_nrpe &>/dev/null; then
   log "Testing NRPE connection..."
-  /usr/local/nagios/libexec/check_nrpe -H localhost
+  if /usr/local/nagios/libexec/check_nrpe -H localhost; then
+    log "NRPE connection test successful"
+  else
+    log "WARNING: NRPE connection test failed"
+  fi
 else
   log "NRPE check command not found"
 fi
@@ -388,7 +486,11 @@ else
 fi
 
 # Display OwnCloud version
-log "OwnCloud version: $(occ -V)"
+if command -v occ &>/dev/null; then
+  log "OwnCloud version: $(occ -V)"
+else
+  log "OCC command not found"
+fi
 
 log "=== SERVER 2 CONFIGURATION COMPLETED SUCCESSFULLY ==="
 log "OwnCloud is accessible at: http://$MY_IP"
