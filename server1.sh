@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# set -euo pipefail
 
 # ===============================
 # Server 1 Configuration Script (server1.sh)
@@ -52,7 +52,7 @@ log "=== UPDATING SYSTEM AND INSTALLING PACKAGES ==="
 apt update -y
 apt install -y nginx bind9 bind9utils bind9-doc dnsutils \
                ufw gcc make libssl-dev xinetd wget \
-               nagios-plugins nagios-plugins-contrib fail2ban
+               nagios-plugins nagios-plugins-contrib fail2ban bc
 
 # 2. Configure UFW
 log "=== CONFIGURING FIREWALL RULES ==="
@@ -88,7 +88,34 @@ chmod 644 /etc/bind/db.cgs6.local
 log "Reloading BIND..."
 systemctl reload bind9 2>/dev/null || systemctl reload named
 
-# 4. Deploy NRPE config
+# 4. Install and configure NRPE from source
+log "=== INSTALLING NRPE FROM SOURCE ==="
+cd /tmp
+log "Downloading NRPE source..."
+wget -q https://github.com/NagiosEnterprises/nrpe/archive/nrpe-4.1.0.tar.gz
+tar xzf nrpe-4.1.0.tar.gz
+cd nrpe-nrpe-4.1.0
+
+log "Configuring NRPE..."
+./configure --enable-command-args
+
+log "Compiling NRPE..."
+make all
+
+log "Installing NRPE..."
+make install-groups-users
+make install
+make install-config
+make install-init
+
+log "Enabling NRPE service..."
+systemctl enable nrpe
+
+# Create necessary directories
+mkdir -p /usr/local/nagios/var
+chown nagios:nagios /usr/local/nagios/var
+
+# 5. Deploy NRPE config
 log "=== DEPLOYING NRPE CONFIG ==="
 NRPE_SRC="${CONF_DIR}/server01_nrpe.cfg"
 NRPE_DEST="/usr/local/nagios/etc/nrpe.cfg"
@@ -98,26 +125,34 @@ if [[ ! -f "$NRPE_SRC" ]]; then
   log "ERROR: missing NRPE config: $NRPE_SRC"
   exit 1
 fi
+
 cp "$NRPE_SRC" "$NRPE_DEST"
 chown nagios:nagios "$NRPE_DEST"
 chmod 640 "$NRPE_DEST"
 
-# 5. Deploy custom plugins
-log "=== DEPLOYING CUSTOM PLUGINS ==="
+# 6. Deploy custom monitoring scripts
+log "=== DEPLOYING CUSTOM MONITORING SCRIPTS ==="
+
+# Deploy monitoring scripts from scripts directory
 for plugin in check_service_cpu.sh check_locks.sh; do
   src="${SCRIPTS_DIR}/$plugin"
   dest="/usr/local/nagios/libexec/$plugin"
+  
   if [[ ! -f "$src" ]]; then
     log "ERROR: missing plugin: $src"
     exit 1
   fi
+  
+  log "Deploying $plugin..."
   cp "$src" "$dest"
   chmod +x "$dest"
   chown nagios:nagios "$dest"
-  log "Installed $plugin"
+  log "✓ Installed $plugin"
 done
 
-# 6. Configure Fail2Ban
+log "Custom monitoring scripts deployed successfully"
+
+# 7. Configure Fail2Ban
 log "=== CONFIGURING FAIL2BAN ==="
 
 # Debug: verificar diretório atual e arquivos
@@ -186,30 +221,53 @@ else
   exit 1
 fi
 
-# 7. Enable & restart core services
+# 8. Enable & restart core services
 log "=== ENABLING AND RESTARTING SERVICES ==="
-systemctl enable nginx bind9 fail2ban
-systemctl restart nginx bind9 fail2ban
+systemctl enable nginx bind9 fail2ban nrpe
+systemctl restart nginx bind9 fail2ban nrpe
 
-# 8. Ensure NRPE service
-log "=== ENSURING NRPE SERVICE ==="
-if command -v nrpe &>/dev/null; then
-  update-rc.d nrpe defaults || true
-  service nrpe restart || service nrpe start
+# 9. Verificar status dos serviços
+log "=== CHECKING SERVICES STATUS ==="
+
+# Verificar NGINX
+if systemctl is-active --quiet nginx; then
+  log "NGINX is running"
 else
-  log "Warning: NRPE not installed."
+  log "NGINX is not running"
 fi
 
-# Verificar status do Fail2Ban
-log "=== CHECKING FAIL2BAN STATUS ==="
+# Verificar BIND
+if systemctl is-active --quiet bind9; then
+  log "BIND9 is running"
+else
+  log "BIND9 is not running"
+fi
+
+# Verificar NRPE
+if systemctl is-active --quiet nrpe; then
+  log "NRPE is running"
+else
+  log "NRPE is not running"
+fi
+
+# Verificar Fail2Ban
 if systemctl is-active --quiet fail2ban; then
-  log "Fail2Ban is running successfully."
+  log "✓ Fail2Ban is running"
   if command -v fail2ban-client &>/dev/null; then
     log "Active jails:"
     fail2ban-client status
   fi
 else
-  log "Warning: Fail2Ban is not running properly."
+  log "✗ Fail2Ban is not running"
+fi
+
+# 10. Test NRPE connection
+log "=== TESTING NRPE CONNECTION ==="
+if command -v /usr/local/nagios/libexec/check_nrpe &>/dev/null; then
+  log "Testing NRPE connection..."
+  /usr/local/nagios/libexec/check_nrpe -H localhost
+else
+  log "NRPE check command not found"
 fi
 
 # Done
