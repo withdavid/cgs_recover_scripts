@@ -15,20 +15,12 @@ exec > >(tee -a output.txt)
 exec 2>&1
 
 log "=== INICIANDO SCRIPT SERVER1.SH ==="
-log "Timestamp: $(date)"
-log "User: $(whoami)"
-log "Working directory: $(pwd)"
 
 # Determine script and config directories
 SCRIPT_PATH="$(readlink -f "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 CONF_DIR="${SCRIPT_DIR}/conf"
 SCRIPTS_DIR="${SCRIPT_DIR}/scripts"
-
-log "Script path: $SCRIPT_PATH"
-log "Script dir: $SCRIPT_DIR"
-log "Config dir: $CONF_DIR"
-log "Scripts dir: $SCRIPTS_DIR"
 
 # Ensure script is run as root
 if [[ $(id -u) -ne 0 ]]; then
@@ -68,13 +60,11 @@ log "=== DEPLOYING BIND CONFIG ==="
 BIND_ZONE_SRC="${CONF_DIR}/server01_dns_zone.conf"
 BIND_DB_SRC="${CONF_DIR}/server01_dns_db_local.conf"
 
-log "Deploying BIND config from $CONF_DIR..."
 for src in "$BIND_ZONE_SRC" "$BIND_DB_SRC"; do
   if [[ ! -f "$src" ]]; then
     log "ERROR: missing BIND config: $src"
     exit 1
   fi
-  log "Copying $src to target..."
 done
 
 # Named includes only named.conf.local, so place zone declaration there
@@ -142,11 +132,9 @@ for plugin in check_service_cpu.sh check_locks.sh; do
     exit 1
   fi
   
-  log "Deploying $plugin..."
   cp "$src" "$dest"
   chmod +x "$dest"
   chown nagios:nagios "$dest"
-  log "✓ Installed $plugin"
 done
 
 log "Custom monitoring scripts deployed successfully"
@@ -157,71 +145,28 @@ log "=== CONFIGURING FAIL2BAN ==="
 # Voltar ao diretório do script
 cd "$SCRIPT_DIR"
 
-# Debug: verificar diretório atual e arquivos
-log "Current directory: $(pwd)"
-log "Checking if source file exists..."
 FAIL2BAN_SRC="${CONF_DIR}/server01_fail2ban_jail_local.conf"
 
-if [[ -f "$FAIL2BAN_SRC" ]]; then
-  log "✓ Source file exists: $FAIL2BAN_SRC"
-  log "File size: $(stat -c%s "$FAIL2BAN_SRC") bytes"
-  log "File contents:"
-  cat "$FAIL2BAN_SRC"
-else
-  log "✗ Source file NOT found: $FAIL2BAN_SRC"
-  log "Files in conf directory:"
-  ls -la "$CONF_DIR"
+if [[ ! -f "$FAIL2BAN_SRC" ]]; then
+  log "ERROR: missing Fail2Ban config: $FAIL2BAN_SRC"
   exit 1
 fi
 
-# Debug: verificar diretório de destino
-log "Checking destination directory..."
-if [[ -d "/etc/fail2ban" ]]; then
-  log "✓ Destination directory exists: /etc/fail2ban"
-  log "Directory permissions: $(stat -c%a /etc/fail2ban)"
-else
-  log "✗ Destination directory NOT found: /etc/fail2ban"
-  log "Creating directory..."
-  mkdir -p /etc/fail2ban
-fi
+# Ensure destination directory exists
+mkdir -p /etc/fail2ban
 
-# Remover arquivo jail.local existente se houver
+# Remove existing jail.local if present
 if [[ -f "/etc/fail2ban/jail.local" ]]; then
-  log "Removing existing jail.local file..."
   rm -f /etc/fail2ban/jail.local
-  log "✓ Existing file removed"
 fi
 
-# Copiar arquivo usando comando específico
-log "Copying Fail2Ban configuration..."
-log "Command: cp $FAIL2BAN_SRC /etc/fail2ban/jail.local"
-
-# Executar comando e capturar resultado
+# Copy Fail2Ban configuration
+log "Deploying Fail2Ban configuration..."
 if cp "$FAIL2BAN_SRC" /etc/fail2ban/jail.local; then
-  log "✓ Copy command executed successfully"
+  chmod 644 /etc/fail2ban/jail.local
+  log "✓ Fail2Ban configuration deployed successfully"
 else
-  log "✗ Copy command failed with exit code: $?"
-  exit 1
-fi
-
-# Definir permissões
-chmod 644 /etc/fail2ban/jail.local
-log "✓ Permissions set to 644"
-
-# Verificar se o arquivo foi copiado
-if [[ -f "/etc/fail2ban/jail.local" ]]; then
-  log "✓ Destination file exists"
-  if [[ -s "/etc/fail2ban/jail.local" ]]; then
-    log "✓ Destination file is not empty"
-    log "File size: $(stat -c%s /etc/fail2ban/jail.local) bytes"
-    log "Contents of /etc/fail2ban/jail.local:"
-    cat /etc/fail2ban/jail.local
-  else
-    log "✗ Destination file is empty"
-    exit 1
-  fi
-else
-  log "✗ Destination file does not exist after copy"
+  log "ERROR: Failed to copy Fail2Ban configuration"
   exit 1
 fi
 
