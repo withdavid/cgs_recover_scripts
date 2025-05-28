@@ -23,16 +23,6 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 CONF_DIR="${SCRIPT_DIR}/conf"
 SCRIPTS_DIR="${SCRIPT_DIR}/scripts"
 
-# Configuration variables
-MY_DOMAIN="owncloud.cgs6.local"
-DB_NAME="owncloud"
-DB_USER="owncloud"
-DB_PASS="OwncloudDB#password123"
-ADMIN_USER="admin"
-ADMIN_PASS="OwnCloud#server2_password123"
-SAMBA_USER="grupo6"
-SAMBA_PASS="grupo6_samba123!"
-
 # Ensure script is run as root
 if [[ $(id -u) -ne 0 ]]; then
   log "ERROR: This script must be run as root."
@@ -49,17 +39,21 @@ if [[ ! -d "$SCRIPTS_DIR" ]]; then
   exit 1
 fi
 
-# 1. Set hostname and update system
-log "=== SETTING HOSTNAME AND UPDATING SYSTEM ==="
-echo $MY_DOMAIN
-hostnamectl set-hostname $MY_DOMAIN
+# === INSTALAÇÃO OWNCLOUD + MARIADB ===
+
+# Define o domain name
+my_domain="owncloud.cgs6.local"
+echo $my_domain
+
+hostnamectl set-hostname $my_domain
 hostname -f
+
 log "Hostname set to: $(hostname -f)"
 
+# Atualiza os pacotes e dá upgrade
 apt update && apt upgrade -y
 
-# 2. Create OCC Script Helper
-log "=== CREATING OCC SCRIPT HELPER ==="
+# Cria um OCC Script Helper
 FILE="/usr/local/bin/occ"
 cat <<EOM >$FILE
 #! /bin/bash
@@ -67,11 +61,12 @@ cd /var/www/owncloud
 sudo -E -u www-data /usr/bin/php /var/www/owncloud/occ "\$@"
 EOM
 
+# Faz o script executavel
 chmod +x $FILE
+
 log "OCC script helper created"
 
-# 3. Install packages
-log "=== INSTALLING PACKAGES ==="
+# Instala os packages necessários
 sudo add-apt-repository ppa:ondrej/php -y
 sudo apt update && sudo apt upgrade
 
@@ -87,37 +82,33 @@ apt install -y \
 
 log "Core packages installed successfully"
 
-# 4. Install SMBClient PHP Module
-log "=== INSTALLING SMBCLIENT PHP MODULE ==="
+# Instala o SMBClient PHP Module
 apt-get install -y php7.4-smbclient
 echo "extension=smbclient.so" > /etc/php/7.4/mods-available/smbclient.ini
 phpenmod smbclient
 systemctl restart apache2
 
-# Verify SMBClient installation
+# Verifica se foi ativado com sucesso
 php -m | grep smbclient
-if php -m | grep -q smbclient; then
-  log "SMBClient PHP module installed successfully"
-else
-  log "WARNING: SMBClient PHP module not found"
-fi
 
-# 5. Install recommended packages
-log "=== INSTALLING RECOMMENDED PACKAGES ==="
+log "SMBClient PHP module configured"
+
+# Instala pacotes recomendados pelo owncloud
 apt install -y \
   unzip bzip2 rsync curl jq \
-  inetutils-ping ldap-utils \
+  inetutils-ping  ldap-utils\
   smbclient
 
-log "Recommended packages installed successfully"
+log "Recommended packages installed"
 
-# 6. Configure Apache2 Virtual Host
-log "=== CONFIGURING APACHE2 VIRTUAL HOST ==="
+# Configuração do Apache2
+# Criação de Virtual Hosts
+
 FILE="/etc/apache2/sites-available/owncloud.conf"
 cat <<EOM >$FILE
 <VirtualHost *:80>
 # uncommment the line below if variable was set
-#ServerName \$MY_DOMAIN
+#ServerName \$my_domain
 DirectoryIndex index.php index.html
 DocumentRoot /var/www/owncloud
 <Directory /var/www/owncloud>
@@ -135,24 +126,19 @@ DocumentRoot /var/www/owncloud
 </VirtualHost>
 EOM
 
-# Test Apache configuration
+# Testa a configuração
 apachectl -t
-if [ $? -eq 0 ]; then
-  log "Apache configuration test passed"
-else
-  log "ERROR: Apache configuration test failed"
-  exit 1
-fi
 
-# Configure Apache
-echo "ServerName $MY_DOMAIN" >> /etc/apache2/apache2.conf
+# Insere o domain name na configuração do apache
+echo "ServerName $my_domain" >> /etc/apache2/apache2.conf
+
+# Habilita a configuração Virtual Host
 a2dissite 000-default
 a2ensite owncloud.conf
 
-log "Apache2 virtual host configured successfully"
+log "Apache2 virtual host configured"
 
-# 7. Configure MariaDB
-log "=== CONFIGURING MARIADB ==="
+# Configuração de base de dados MariaDB
 sed -i "/\[mysqld\]/atransaction-isolation = READ-COMMITTED\nperformance_schema = on" /etc/mysql/mariadb.conf.d/50-server.cnf
 systemctl start mariadb
 
@@ -164,29 +150,21 @@ FLUSH PRIVILEGES;"
 
 log "MariaDB configured successfully"
 
-# 8. Enable Apache modules and restart
-log "=== ENABLING APACHE MODULES ==="
+# Habilita modulos Apache recomendados e reinicia o serviço
 a2enmod dir env headers mime rewrite setenvif
 systemctl restart apache2
 
-log "Apache modules enabled and service restarted"
+log "Apache modules enabled"
 
-# 9. Download and install OwnCloud
-log "=== DOWNLOADING AND INSTALLING OWNCLOUD ==="
+# Download Owncload
 cd /var/www/
 wget https://download.owncloud.com/server/stable/owncloud-complete-latest.tar.bz2 && \
 tar -xjf owncloud-complete-latest.tar.bz2 && \
 chown -R www-data. owncloud
 
-if [ $? -eq 0 ]; then
-  log "OwnCloud downloaded and extracted successfully"
-else
-  log "ERROR: Failed to download or extract OwnCloud"
-  exit 1
-fi
+log "OwnCloud downloaded and extracted"
 
-# 10. Install OwnCloud
-log "=== INSTALLING OWNCLOUD ==="
+# Instalação Owncload
 occ maintenance:install \
 --database "mysql" \
 --database-name "owncloud" \
@@ -196,36 +174,29 @@ occ maintenance:install \
 --admin-user "admin" \
 --admin-pass "OwnCloud#server2_password123"
 
-if [ $? -eq 0 ]; then
-  log "OwnCloud installed successfully"
-else
-  log "ERROR: OwnCloud installation failed"
-  exit 1
-fi
+log "OwnCloud installed successfully"
 
-# 11. Configure trusted domains
-log "=== CONFIGURING TRUSTED DOMAINS ==="
-MY_IP=$(hostname -I|cut -f1 -d ' ')
-occ config:system:set trusted_domains 1 --value="$MY_IP"
-occ config:system:set trusted_domains 2 --value="$MY_DOMAIN"
+# Configura os dominios confiáveis (Trusted Domains)
+my_ip=$(hostname -I|cut -f1 -d ' ')
+occ config:system:set trusted_domains 1 --value="$my_ip"
+occ config:system:set trusted_domains 2 --value="$my_domain"
 
-log "Trusted domains configured: $MY_IP and $MY_DOMAIN"
+log "Trusted domains configured: $my_ip and $my_domain"
 
-# 12. Configure background jobs and cron
-log "=== CONFIGURING BACKGROUND JOBS ==="
+# Define o cron job para modo background
 occ background:cron
 
+# Define a execução do cronjon para a cada 15 minutos e elimina os chuncks todas as noites às 02:00H
 echo "*/15  *  *  *  * /var/www/owncloud/occ system:cron" \
   | sudo -u www-data -g crontab tee -a \
   /var/spool/cron/crontabs/www-data
 echo "0  2  *  *  * /var/www/owncloud/occ dav:cleanup-chunks" \
   | sudo -u www-data -g crontab tee -a \
   /var/spool/cron/crontabs/www-data
-
+  
 log "Background jobs and cron configured"
 
-# 13. Configure cache and locks
-log "=== CONFIGURING CACHE AND LOCKS ==="
+# Configura Cache e Locks de ficheiros
 occ config:system:set \
    memcache.local \
    --value '\OC\Memcache\APCu'
@@ -239,8 +210,7 @@ occ config:system:set \
 
 log "Cache and locks configured"
 
-# 14. Configure log rotation
-log "=== CONFIGURING LOG ROTATION ==="
+# Configura rotação de logs
 FILE="/etc/logrotate.d/owncloud"
 sudo cat <<EOM >$FILE
 /var/www/owncloud/data/owncloud.log {
@@ -255,38 +225,50 @@ EOM
 
 log "Log rotation configured"
 
-# 15. Finalize OwnCloud setup
-log "=== FINALIZING OWNCLOUD SETUP ==="
+# Finaliza o processo de instalação
 cd /var/www/
 chown -R www-data. owncloud
 
 occ -V
-echo "Your ownCloud is accessable under: "$MY_IP
-echo "Your ownCloud is accessable under: "$MY_DOMAIN
+echo "Your ownCloud is accessable under: "$my_ip
+echo "Your ownCloud is accessable under: "$my_domain
 echo "The Installation is complete."
 
-log "OwnCloud setup completed"
-log "Access URL: http://$MY_IP"
-log "Access URL: http://$MY_DOMAIN"
+log "OwnCloud installation completed successfully"
 
-# 16. Configure UFW Firewall (Basic)
-log "=== CONFIGURING BASIC FIREWALL ==="
-ufw allow 22/tcp    # SSH
-ufw allow 80/tcp    # HTTP
-ufw allow 443/tcp   # HTTPS
+# === UFW FIREWALL ===
+
+log "=== CONFIGURING UFW FIREWALL ==="
+
+# Permite acesso externo SSH
+ufw allow 22/tcp
+
+# Permite acesso externo HTTP & HTTPS
+ufw allow 80/tcp
+ufw allow 443/tcp
+
+# Habilita o ufw
 ufw --force enable
 
-log "Basic firewall configured"
+log "UFW firewall configured"
 
-# 17. Configure Samba
-log "=== CONFIGURING SAMBA ==="
+# === SAMBA SERVER ===
+
+log "=== CONFIGURING SAMBA SERVER ==="
+
+# Atualização de packages ubuntu
 apt update && sudo apt upgrade -y
+
+# Instalação do Samba
 apt install samba -y
+
+# Verifica versão instalad
+samba --version
 
 log "Samba version: $(samba --version)"
 
-# Add Samba configuration
-cat >> /etc/samba/smb.conf << EOF
+# Adiciona configuração do samba
+cat >> /etc/samba/smb.conf << 'EOF'
 
 [grupo6]
    comment = Pasta partilhada grupo 6
@@ -298,20 +280,20 @@ cat >> /etc/samba/smb.conf << EOF
    read only = no
 EOF
 
-# Create Samba user and directory
 sudo adduser grupo6
 sudo smbpasswd -a grupo6
 mkdir -p /home/grupo6/pasta_grupo6
 sudo chown grupo6:grupo6 /home/grupo6/pasta_grupo6
 systemctl restart smbd
 
-# Allow Samba through firewall
 ufw allow 445/tcp
 
 log "Samba configured successfully"
 
-# 18. Install and configure NRPE
+# === INSTALAÇÃO NRPE ===
+
 log "=== INSTALLING NRPE ==="
+
 sudo apt-get update
 sudo apt-get install -y gcc make libssl-dev xinetd wget
 
@@ -331,8 +313,7 @@ sudo systemctl start nrpe
 
 log "NRPE installed successfully"
 
-# 19. Deploy NRPE config
-log "=== DEPLOYING NRPE CONFIG ==="
+# Deploy NRPE config
 NRPE_SRC="${CONF_DIR}/server02_nrpe.cfg"
 NRPE_DEST="/usr/local/nagios/etc/nrpe.cfg"
 
@@ -345,10 +326,8 @@ else
   log "WARNING: NRPE config file not found: $NRPE_SRC"
 fi
 
-# Allow NRPE through firewall
 sudo ufw allow 5666/tcp
 
-# Create necessary directories
 sudo mkdir -p /usr/local/nagios/var
 sudo chown nagios:nagios /usr/local/nagios/var
 
@@ -358,14 +337,13 @@ sudo systemctl status nrpe
 
 log "NRPE configured and tested"
 
-# 20. Install monitoring dependencies
+# === INSTALA DEPENDENCIAS AGENTES ===
+
 log "=== INSTALLING MONITORING DEPENDENCIES ==="
+
 sudo apt install nagios-plugins nagios-plugins-contrib
 
-# 21. Deploy custom monitoring scripts
-log "=== DEPLOYING CUSTOM MONITORING SCRIPTS ==="
-
-# Deploy check_smb_share
+# Deploy custom monitoring scripts
 if [[ -f "${SCRIPTS_DIR}/check_smb_share" ]]; then
   cp "${SCRIPTS_DIR}/check_smb_share" "/usr/lib/nagios/plugins/check_smb_share"
   chmod +x "/usr/lib/nagios/plugins/check_smb_share"
@@ -391,10 +369,12 @@ done
 
 sudo systemctl restart nrpe
 
-log "Custom monitoring scripts deployed"
+log "Monitoring scripts deployed"
 
-# 22. Configure Fail2Ban
+# === FAIL2BAN ===
+
 log "=== CONFIGURING FAIL2BAN ==="
+
 apt install fail2ban
 systemctl enable fail2ban
 systemctl start fail2ban
@@ -432,7 +412,6 @@ fi
 
 systemctl restart fail2ban
 
-# Check Fail2Ban status
 fail2ban-client status
 fail2ban-client status sshd
 fail2ban-client status owncloud-auth
@@ -440,7 +419,8 @@ fail2ban-client status samba-auth
 
 log "Fail2Ban configured successfully"
 
-# 23. Final verification
+# === VERIFICAÇÃO FINAL ===
+
 log "=== FINAL VERIFICATION ==="
 
 services=("apache2" "mariadb" "redis-server" "smbd" "nrpe" "fail2ban")
@@ -453,10 +433,10 @@ for service in "${services[@]}"; do
 done
 
 log "=== SERVER 2 CONFIGURATION COMPLETED ==="
-log "OwnCloud Admin: $ADMIN_USER / $ADMIN_PASS"
-log "Database: $DB_USER / $DB_PASS"
-log "Samba User: $SAMBA_USER / $SAMBA_PASS"
-log "OwnCloud URL: http://$MY_IP"
-log "OwnCloud URL: http://$MY_DOMAIN"
-log "Samba Share: \\\\$MY_IP\\grupo6"
+log "OwnCloud Admin: admin / OwnCloud#server2_password123"
+log "Database: owncloud / OwncloudDB#password123"
+log "Samba User: grupo6 / grupo6_samba123!"
+log "OwnCloud URL: http://$my_ip"
+log "OwnCloud URL: http://$my_domain"
+log "Samba Share: \\\\$my_ip\\grupo6"
 log "Check output_sv2.txt for detailed logs"
