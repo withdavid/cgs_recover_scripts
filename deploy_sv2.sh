@@ -53,8 +53,28 @@ log "OCC script helper created at $FILE"
 
 # Instala os packages necessários
 log "Adding ondrej/php PPA repository..."
-sudo add-apt-repository ppa:ondrej/php -y
-sudo apt update && sudo apt upgrade
+# Install software-properties-common first if not available
+apt install -y software-properties-common
+
+# Add the repository with proper key handling
+add-apt-repository ppa:ondrej/php -y
+
+# Update package lists
+apt update
+
+# Verify the repository was added correctly
+log "Verifying PHP 7.4 availability..."
+if apt-cache search php7.4 | grep -q php7.4; then
+  log "PHP 7.4 packages found in repository"
+else
+  log "ERROR: PHP 7.4 packages not found. Trying alternative method..."
+  
+  # Alternative method: manually add the repository
+  wget -qO /tmp/debsuryorg-archive-keyring.deb https://packages.sury.org/debsuryorg-archive-keyring.deb
+  dpkg -i /tmp/debsuryorg-archive-keyring.deb
+  echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/sury-php.list
+  apt update
+fi
 
 log "Installing required packages..."
 apt install -y \
@@ -71,22 +91,81 @@ if [ $? -eq 0 ]; then
   log "Required packages installed successfully"
 else
   log "ERROR: Failed to install required packages"
+  
+  # Try installing packages individually to identify which ones are failing
+  log "Attempting individual package installation..."
+  
+  packages=(
+    "apache2"
+    "libapache2-mod-php7.4"
+    "mariadb-server"
+    "openssl"
+    "redis-server"
+    "wget"
+    "php7.4"
+    "php7.4-common"
+    "php7.4-curl"
+    "php7.4-gd"
+    "php7.4-intl"
+    "php7.4-json"
+    "php7.4-mbstring"
+    "php7.4-mysql"
+    "php7.4-xml"
+    "php7.4-zip"
+  )
+  
+  failed_packages=()
+  
+  for package in "${packages[@]}"; do
+    if apt install -y "$package"; then
+      log "✓ $package installed successfully"
+    else
+      log "✗ Failed to install $package"
+      failed_packages+=("$package")
+    fi
+  done
+  
+  if [ ${#failed_packages[@]} -gt 0 ]; then
+    log "ERROR: Failed to install: ${failed_packages[*]}"
+    exit 1
+  fi
+fi
+
+# Verify PHP 7.4 is installed and set as default
+log "Verifying PHP 7.4 installation..."
+if command -v php7.4 &>/dev/null; then
+  log "PHP 7.4 installed successfully: $(php7.4 --version | head -1)"
+  
+  # Set PHP 7.4 as default if multiple versions exist
+  update-alternatives --set php /usr/bin/php7.4
+  
+  # Verify Apache is using PHP 7.4
+  a2dismod php8.* 2>/dev/null || true
+  a2enmod php7.4
+  
+else
+  log "ERROR: PHP 7.4 not found after installation"
   exit 1
 fi
 
 # Instala o SMBClient PHP Module
 log "Installing SMBClient PHP module..."
 apt-get install -y php7.4-smbclient
-echo "extension=smbclient.so" > /etc/php/7.4/mods-available/smbclient.ini
-phpenmod smbclient
-systemctl restart apache2
 
-# Verifica se foi ativado com sucesso
-log "Verifying SMBClient installation..."
-if php -m | grep smbclient; then
-  log "SMBClient PHP module installed successfully"
+if [ $? -eq 0 ]; then
+  echo "extension=smbclient.so" > /etc/php/7.4/mods-available/smbclient.ini
+  phpenmod -v 7.4 smbclient
+  systemctl restart apache2
+  
+  # Verifica se foi ativado com sucesso
+  log "Verifying SMBClient installation..."
+  if php7.4 -m | grep smbclient; then
+    log "SMBClient PHP module installed successfully"
+  else
+    log "WARNING: SMBClient module may not be properly installed"
+  fi
 else
-  log "WARNING: SMBClient module may not be properly installed"
+  log "WARNING: Failed to install php7.4-smbclient, continuing without it"
 fi
 
 # Instala pacotes recomendados pelo owncloud
