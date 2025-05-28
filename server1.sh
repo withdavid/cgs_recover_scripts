@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# set -euo pipefail
 
 # ===============================
 # Server 1 Configuration Script (server1.sh)
@@ -155,18 +154,23 @@ log "Custom monitoring scripts deployed successfully"
 # 7. Configure Fail2Ban
 log "=== CONFIGURING FAIL2BAN ==="
 
+# Voltar ao diretório do script
+cd "$SCRIPT_DIR"
+
 # Debug: verificar diretório atual e arquivos
 log "Current directory: $(pwd)"
 log "Checking if source file exists..."
-if [[ -f "conf/server01_fail2ban_jail_local.conf" ]]; then
-  log "✓ Source file exists: conf/server01_fail2ban_jail_local.conf"
-  log "File size: $(stat -c%s conf/server01_fail2ban_jail_local.conf) bytes"
+FAIL2BAN_SRC="${CONF_DIR}/server01_fail2ban_jail_local.conf"
+
+if [[ -f "$FAIL2BAN_SRC" ]]; then
+  log "✓ Source file exists: $FAIL2BAN_SRC"
+  log "File size: $(stat -c%s "$FAIL2BAN_SRC") bytes"
   log "File contents:"
-  cat conf/server01_fail2ban_jail_local.conf
+  cat "$FAIL2BAN_SRC"
 else
-  log "✗ Source file NOT found: conf/server01_fail2ban_jail_local.conf"
+  log "✗ Source file NOT found: $FAIL2BAN_SRC"
   log "Files in conf directory:"
-  ls -la conf/
+  ls -la "$CONF_DIR"
   exit 1
 fi
 
@@ -190,10 +194,10 @@ fi
 
 # Copiar arquivo usando comando específico
 log "Copying Fail2Ban configuration..."
-log "Command: cp conf/server01_fail2ban_jail_local.conf /etc/fail2ban/jail.local"
+log "Command: cp $FAIL2BAN_SRC /etc/fail2ban/jail.local"
 
 # Executar comando e capturar resultado
-if cp conf/server01_fail2ban_jail_local.conf /etc/fail2ban/jail.local; then
+if cp "$FAIL2BAN_SRC" /etc/fail2ban/jail.local; then
   log "✓ Copy command executed successfully"
 else
   log "✗ Copy command failed with exit code: $?"
