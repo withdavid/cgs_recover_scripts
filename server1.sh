@@ -98,34 +98,23 @@ done
 
 # 6. Configure Fail2Ban
 echo "Configuring Fail2Ban..."
-FAIL2BAN_SRC="${CONF_DIR}/server01_fail2ban_jail_local.conf"
-FAIL2BAN_DEST="/etc/fail2ban/jail.local"
-
-# Verificar se o arquivo fonte existe
-if [[ ! -f "$FAIL2BAN_SRC" ]]; then
-  echo "Error: Fail2Ban config file not found: $FAIL2BAN_SRC" >&2
-  exit 1
-fi
 
 # Remover arquivo jail.local existente se houver
-if [[ -f "$FAIL2BAN_DEST" ]]; then
+if [[ -f "/etc/fail2ban/jail.local" ]]; then
   echo "Removing existing jail.local file..."
-  rm -f "$FAIL2BAN_DEST"
+  rm -f /etc/fail2ban/jail.local
 fi
 
-# Copiar arquivo diretamente
+# Copiar arquivo usando comando específico
 echo "Copying Fail2Ban configuration..."
-echo "From: $FAIL2BAN_SRC"
-echo "To: $FAIL2BAN_DEST"
-
-cp "$FAIL2BAN_SRC" "$FAIL2BAN_DEST"
-chmod 644 "$FAIL2BAN_DEST"
+cp conf/server01_fail2ban_jail_local.conf /etc/fail2ban/jail.local
+chmod 644 /etc/fail2ban/jail.local
 
 # Verificar se o arquivo foi copiado
-if [[ -f "$FAIL2BAN_DEST" && -s "$FAIL2BAN_DEST" ]]; then
+if [[ -f "/etc/fail2ban/jail.local" && -s "/etc/fail2ban/jail.local" ]]; then
   echo "Fail2Ban configuration copied successfully."
-  echo "Contents of $FAIL2BAN_DEST:"
-  cat "$FAIL2BAN_DEST"
+  echo "Contents of /etc/fail2ban/jail.local:"
+  cat /etc/fail2ban/jail.local
 else
   echo "Error: Failed to copy Fail2Ban configuration" >&2
   exit 1
