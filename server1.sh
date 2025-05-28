@@ -3,16 +3,18 @@ set -euo pipefail
 
 # ===============================
 # Server 1 Configuration Script (server1.sh)
-# Copies pre-defined configs and installs services
+# Applies pre-defined configs and installs services
 # ===============================
 
 # Variables
-DNS_CONF_DIR="./conf"
-SCRIPTS_DIR="./scripts"
+defaults_user_conf_dir="./conf"
+defaults_user_scripts_dir="./scripts"
+CONF_DIR="${defaults_user_conf_dir}"
+SCRIPTS_DIR="${defaults_user_scripts_dir}"
 
 # Ensure script is run as root
 if [[ $(id -u) -ne 0 ]]; then
-  echo "This script must be run as root."
+  echo "This script must be run as root." >&2
   exit 1
 fi
 
@@ -32,44 +34,66 @@ ufw allow 5666/tcp
 ufw --force enable
 
 # 3. Deploy BIND config
-cp "${DNS_CONF_DIR}/server01_dns_zone.conf" /etc/bind/named.conf.local
-cp "${DNS_CONF_DIR}/server01_dns_db_local.conf" /etc/bind/db.cgs6.local
+BIND_ZONE_CONF="${CONF_DIR}/server01_dns_zone.conf"
+BIND_DB_CONF="${CONF_DIR}/server01_dns_db_local.conf"
+if [[ ! -f "$BIND_ZONE_CONF" || ! -f "$BIND_DB_CONF" ]]; then
+  echo "Error: BIND config files not found in ${CONF_DIR}" >&2
+  exit 1
+fi
+cp "$BIND_ZONE_CONF" /etc/bind/named.conf.local
+cp "$BIND_DB_CONF" /etc/bind/db.cgs6.local
 chown root:bind /etc/bind/db.cgs6.local
 chmod 644 /etc/bind/db.cgs6.local
-systemctl reload bind9 || systemctl reload named
+systemctl reload bind9 2>/dev/null || systemctl reload named
 
 # 4. Deploy NRPE config
-NRPE_CFG_DEST="/usr/local/nagios/etc/nrpe.cfg"
-cp "${DNS_CONF_DIR}/server01_nrpe.cfg" "${NRPE_CFG_DEST}"
-chown nagios:nagios "${NRPE_CFG_DEST}"
-chmod 640 "${NRPE_CFG_DEST}"
+NRPE_SRC="${CONF_DIR}/server01_nrpe.cfg"
+NRPE_DEST="/usr/local/nagios/etc/nrpe.cfg"
+if [[ ! -f "$NRPE_SRC" ]]; then
+  echo "Error: NRPE config file not found: $NRPE_SRC" >&2
+  exit 1
+fi
+cp "$NRPE_SRC" "$NRPE_DEST"
+chown nagios:nagios "$NRPE_DEST"
+chmod 640 "$NRPE_DEST"
 
 # 5. Deploy custom plugins
-cp "${SCRIPTS_DIR}/check_service_cpu.sh" /usr/local/nagios/libexec/
-cp "${SCRIPTS_DIR}/check_locks.sh" /usr/local/nagios/libexec/
-chmod +x /usr/local/nagios/libexec/check_service_cpu.sh
-chmod +x /usr/local/nagios/libexec/check_locks.sh
-chown nagios:nagios /usr/local/nagios/libexec/check_*.sh
+for plugin in check_service_cpu.sh check_locks.sh; do
+  src="${SCRIPTS_DIR}/$plugin"
+  dest="/usr/local/nagios/libexec/$plugin"
+  if [[ ! -f "$src" ]]; then
+    echo "Error: Plugin not found: $src" >&2
+    exit 1
+  fi
+  cp "$src" "$dest"
+  chmod +x "$dest"
+  chown nagios:nagios "$dest"
+done
 
 # 6. Deploy Fail2Ban config
-if [[ -f /etc/fail2ban/jail.local ]]; then
-  mv /etc/fail2ban/jail.local /etc/fail2ban/jail.local.bak
+FAIL2BAN_SRC="${CONF_DIR}/server01_fail2ban_jail_local.conf"
+FAIL2BAN_DEST="/etc/fail2ban/jail.local"
+if [[ ! -f "$FAIL2BAN_SRC" ]]; then
+  echo "Error: Fail2Ban config not found: $FAIL2BAN_SRC" >&2
+  exit 1
 fi
-cp "${DNS_CONF_DIR}/server01_fail2ban_jail_local.conf" /etc/fail2ban/jail.local
-chmod 644 /etc/fail2ban/jail.local
+if [[ -f "$FAIL2BAN_DEST" ]]; then
+  mv "$FAIL2BAN_DEST" "${FAIL2BAN_DEST}.bak"
+fi
+cp "$FAIL2BAN_SRC" "$FAIL2BAN_DEST"
+chmod 644 "$FAIL2BAN_DEST"
 systemctl reload fail2ban
 
-# 7. Enable & start services
+# 7. Enable & restart core services
 systemctl enable nginx bind9 fail2ban
 systemctl restart nginx bind9 fail2ban
 
-# 8. Install & start NRPE
-# assume NRPE already built; just ensure service is running
-if ! command -v nrpe &>/dev/null; then
-  echo "NRPE not found: please install NRPE agent separately."
-else
+# 8. Ensure NRPE service
+if command -v nrpe &>/dev/null; then
   update-rc.d nrpe defaults || true
   service nrpe restart || service nrpe start
+else
+  echo "Warning: NRPE not installed; please install agent separately." >&2
 fi
 
 echo "Server 1 configuration applied successfully."
