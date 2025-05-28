@@ -99,6 +99,10 @@ FAIL2BAN_SRC="${CONF_DIR}/server01_fail2ban_jail_local.conf"
 FAIL2BAN_DEST="/etc/fail2ban/jail.local"
 
 echo "Deploying Fail2Ban config..."
+echo "Source: $FAIL2BAN_SRC"
+echo "Destination: $FAIL2BAN_DEST"
+
+# Ensure source file exists and is not empty
 if [[ ! -f "$FAIL2BAN_SRC" ]]; then
   echo "Error: missing Fail2Ban config: $FAIL2BAN_SRC" >&2
   exit 1
@@ -110,18 +114,47 @@ if [[ ! -s "$FAIL2BAN_SRC" ]]; then
   exit 1
 fi
 
+# Ensure directory exists
+if [[ ! -d "/etc/fail2ban" ]]; then
+  echo "Creating /etc/fail2ban directory..."
+  mkdir -p /etc/fail2ban
+  if [[ $? -ne 0 ]]; then
+    echo "Error: Failed to create /etc/fail2ban directory" >&2
+    exit 1
+  fi
+fi
+
+# Backup existing file if any
 if [[ -f "$FAIL2BAN_DEST" ]]; then
   mv "$FAIL2BAN_DEST" "${FAIL2BAN_DEST}.bak"
   echo "  Backed up existing jail.local"
 fi
 
-# Copy file and verify
-cp "$FAIL2BAN_SRC" "$FAIL2BAN_DEST"
+# Copy file with verbose output
+echo "Copying file with: cp -v \"$FAIL2BAN_SRC\" \"$FAIL2BAN_DEST\""
+cp -v "$FAIL2BAN_SRC" "$FAIL2BAN_DEST"
+COPY_RESULT=$?
+
+if [[ $COPY_RESULT -ne 0 ]]; then
+  echo "Error: cp command failed with exit code $COPY_RESULT" >&2
+  exit 1
+fi
+
 chmod 644 "$FAIL2BAN_DEST"
 
 # Verify the file was copied correctly
+if [[ ! -f "$FAIL2BAN_DEST" ]]; then
+  echo "Error: Failed to copy Fail2Ban config or file does not exist" >&2
+  # Try to restore from backup if available
+  if [[ -f "${FAIL2BAN_DEST}.bak" ]]; then
+    echo "  Restoring from backup..."
+    cp "${FAIL2BAN_DEST}.bak" "$FAIL2BAN_DEST"
+  fi
+  exit 1
+fi
+
 if [[ ! -s "$FAIL2BAN_DEST" ]]; then
-  echo "Error: Failed to copy Fail2Ban config or file is empty" >&2
+  echo "Error: Fail2Ban config file is empty after copy" >&2
   # Try to restore from backup if available
   if [[ -f "${FAIL2BAN_DEST}.bak" ]]; then
     echo "  Restoring from backup..."
@@ -131,6 +164,10 @@ if [[ ! -s "$FAIL2BAN_DEST" ]]; then
 fi
 
 echo "Fail2Ban config file installed successfully."
+
+# Show file contents for verification
+echo "Contents of $FAIL2BAN_DEST:"
+cat "$FAIL2BAN_DEST"
 
 # 7. Enable & restart core services
 echo "Enabling and restarting services..."
