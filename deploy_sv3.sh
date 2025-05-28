@@ -699,9 +699,9 @@ log "=== FINAL VERIFICATION ==="
 services=("apache2" "nagios" "fail2ban")
 for service in "${services[@]}"; do
   if systemctl is-active --quiet "$service"; then
-    log "✓ $service is running"
+    log "$service is running"
   else
-    log "⚠️  $service is not running"
+    log "$service is not running"
     systemctl status "$service" --no-pager -l
   fi
 done

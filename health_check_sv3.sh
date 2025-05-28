@@ -437,13 +437,13 @@ if [ $total_checks -gt 0 ]; then
   log_info "Success rate: ${success_rate}%"
   
   if [ $failed_checks -eq 0 ] && [ $warning_checks -eq 0 ]; then
-    log_success "🎉 ALL CHECKS PASSED - Nagios Core server is healthy!"
+    log_success "ALL CHECKS PASSED - Nagios Core server is healthy!"
     exit 0
   elif [ $failed_checks -eq 0 ]; then
-    log_warning "⚠️  Some warnings found - Nagios Core server needs attention"
+    log_warning "Some warnings found - Nagios Core server needs attention"
     exit 1
   else
-    log_error "❌ Critical issues found - Nagios Core server needs immediate attention"
+    log_error "Critical issues found - Nagios Core server needs immediate attention"
     exit 2
   fi
 else
