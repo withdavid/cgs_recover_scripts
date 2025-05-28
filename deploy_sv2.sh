@@ -68,9 +68,11 @@ log "OCC script helper created"
 
 # Instala os packages necessários
 sudo add-apt-repository ppa:ondrej/php -y
-sudo apt update && sudo apt upgrade
+sudo apt update && sudo apt upgrade -y
 
-apt install -y \
+# Install packages with error checking
+log "Installing core packages..."
+if ! apt install -y \
   apache2 \
   libapache2-mod-php7.4 \
   mariadb-server mariadb-client openssl redis-server wget \
@@ -78,7 +80,40 @@ apt install -y \
   php7.4-gd php7.4-imap php7.4-intl php7.4-json \
   php7.4-mbstring php7.4-gmp php7.4-bcmath php7.4-mysql \
   php7.4-ssh2 php7.4-xml php7.4-zip php7.4-apcu \
-  php7.4-redis php7.4-ldap php-phpseclib
+  php7.4-redis php7.4-ldap php-phpseclib; then
+  log "ERROR: Package installation failed"
+  exit 1
+fi
+
+# Verify critical packages are installed
+log "Verifying package installation..."
+
+if ! command -v apache2 &>/dev/null; then
+  log "ERROR: Apache2 not installed, trying alternative installation..."
+  apt install -y apache2 apache2-utils
+fi
+
+if ! command -v mysql &>/dev/null; then
+  log "ERROR: MariaDB not installed, trying alternative installation..."
+  apt install -y mariadb-server mariadb-client mysql-common
+fi
+
+if ! command -v redis-server &>/dev/null; then
+  log "ERROR: Redis not installed, trying alternative installation..."
+  apt install -y redis-server redis-tools
+fi
+
+# Verify again
+missing_packages=()
+if ! command -v apache2 &>/dev/null; then missing_packages+=("apache2"); fi
+if ! command -v mysql &>/dev/null; then missing_packages+=("mariadb"); fi
+if ! command -v redis-server &>/dev/null; then missing_packages+=("redis"); fi
+
+if [ ${#missing_packages[@]} -gt 0 ]; then
+  log "ERROR: Critical packages still missing: ${missing_packages[*]}"
+  log "Please install manually: apt install apache2 mariadb-server redis-server"
+  exit 1
+fi
 
 # Ensure critical services are started
 systemctl enable apache2 mariadb redis-server
@@ -124,6 +159,12 @@ log "Recommended packages installed"
 # Configuração do Apache2
 # Criação de Virtual Hosts
 
+# Verify Apache is installed and directories exist
+if [ ! -d "/etc/apache2/sites-available" ]; then
+  log "ERROR: Apache2 not properly installed - missing sites-available directory"
+  exit 1
+fi
+
 FILE="/etc/apache2/sites-available/owncloud.conf"
 cat <<EOM >$FILE
 <VirtualHost *:80>
@@ -147,46 +188,100 @@ DocumentRoot /var/www/owncloud
 EOM
 
 # Testa a configuração
-apachectl -t
+if command -v apachectl &>/dev/null; then
+  apachectl -t
+else
+  log "WARNING: apachectl command not found, skipping configuration test"
+fi
 
 # Insere o domain name na configuração do apache
-echo "ServerName $my_domain" >> /etc/apache2/apache2.conf
+if [ -f "/etc/apache2/apache2.conf" ]; then
+  echo "ServerName $my_domain" >> /etc/apache2/apache2.conf
+else
+  log "WARNING: /etc/apache2/apache2.conf not found"
+fi
 
 # Habilita a configuração Virtual Host
-a2dissite 000-default
-a2ensite owncloud.conf
+if command -v a2dissite &>/dev/null && command -v a2ensite &>/dev/null; then
+  a2dissite 000-default
+  a2ensite owncloud.conf
+else
+  log "WARNING: a2dissite/a2ensite commands not found"
+fi
 
 log "Apache2 virtual host configured"
 
 # Configuração de base de dados MariaDB
-sed -i "/\[mysqld\]/atransaction-isolation = READ-COMMITTED\nperformance_schema = on" /etc/mysql/mariadb.conf.d/50-server.cnf
-systemctl restart mariadb
+
+# Check if MariaDB configuration directory exists
+if [ -d "/etc/mysql/mariadb.conf.d" ] && [ -f "/etc/mysql/mariadb.conf.d/50-server.cnf" ]; then
+  sed -i "/\[mysqld\]/atransaction-isolation = READ-COMMITTED\nperformance_schema = on" /etc/mysql/mariadb.conf.d/50-server.cnf
+else
+  log "WARNING: MariaDB configuration file not found, trying alternative locations..."
+  
+  # Try alternative configuration files
+  if [ -f "/etc/mysql/my.cnf" ]; then
+    echo -e "\n[mysqld]\ntransaction-isolation = READ-COMMITTED\nperformance_schema = on" >> /etc/mysql/my.cnf
+    log "Added configuration to /etc/mysql/my.cnf"
+  elif [ -f "/etc/mysql/mysql.conf.d/mysqld.cnf" ]; then
+    sed -i "/\[mysqld\]/atransaction-isolation = READ-COMMITTED\nperformance_schema = on" /etc/mysql/mysql.conf.d/mysqld.cnf
+    log "Added configuration to /etc/mysql/mysql.conf.d/mysqld.cnf"
+  else
+    log "WARNING: No MariaDB configuration file found"
+  fi
+fi
+
+# Start MariaDB service
+if systemctl list-unit-files | grep -q mariadb.service; then
+  systemctl restart mariadb
+elif systemctl list-unit-files | grep -q mysql.service; then
+  systemctl restart mysql
+  log "Using mysql.service instead of mariadb.service"
+else
+  log "ERROR: Neither mariadb.service nor mysql.service found"
+  exit 1
+fi
 
 # Verify MariaDB is running after restart
-if ! systemctl is-active --quiet mariadb; then
-  log "ERROR: MariaDB failed to restart after configuration"
-  systemctl status mariadb
-  exit 1
-fi
-
-mysql -u root -e \
-"CREATE DATABASE IF NOT EXISTS owncloud; \
-CREATE USER IF NOT EXISTS 'owncloud'@'localhost' IDENTIFIED BY 'OwncloudDB#password123'; \
-GRANT ALL PRIVILEGES ON owncloud.* TO 'owncloud'@'localhost' WITH GRANT OPTION; \
-FLUSH PRIVILEGES;"
-
-# Test database connection
-if mysql -u owncloud -p'OwncloudDB#password123' -e "USE owncloud;" 2>/dev/null; then
-  log "MariaDB configured and tested successfully"
+if systemctl is-active --quiet mariadb 2>/dev/null; then
+  service_name="mariadb"
+elif systemctl is-active --quiet mysql 2>/dev/null; then
+  service_name="mysql"
 else
-  log "ERROR: MariaDB configuration test failed"
+  log "ERROR: MariaDB/MySQL failed to start"
+  systemctl status mariadb 2>/dev/null || systemctl status mysql 2>/dev/null
   exit 1
 fi
 
-log "MariaDB configured successfully"
+log "MariaDB service ($service_name) is running"
+
+# Configure database
+if command -v mysql &>/dev/null; then
+  mysql -u root -e \
+  "CREATE DATABASE IF NOT EXISTS owncloud; \
+  CREATE USER IF NOT EXISTS 'owncloud'@'localhost' IDENTIFIED BY 'OwncloudDB#password123'; \
+  GRANT ALL PRIVILEGES ON owncloud.* TO 'owncloud'@'localhost' WITH GRANT OPTION; \
+  FLUSH PRIVILEGES;"
+
+  # Test database connection
+  if mysql -u owncloud -p'OwncloudDB#password123' -e "USE owncloud;" 2>/dev/null; then
+    log "MariaDB configured and tested successfully"
+  else
+    log "ERROR: MariaDB configuration test failed"
+    exit 1
+  fi
+else
+  log "ERROR: mysql command not found"
+  exit 1
+fi
 
 # Habilita modulos Apache recomendados e reinicia o serviço
-a2enmod dir env headers mime rewrite setenvif
+if command -v a2enmod &>/dev/null; then
+  a2enmod dir env headers mime rewrite setenvif
+else
+  log "WARNING: a2enmod command not found, skipping module enablement"
+fi
+
 systemctl restart apache2
 
 # Verify Apache is running after restart
